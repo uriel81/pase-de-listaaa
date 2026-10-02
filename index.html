@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pase de lista</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:480px;margin:auto;padding:16px}
+  input,button{font-size:18px;padding:10px;margin:4px 0;width:100%;box-sizing:border-box}
+  button{cursor:pointer}
+  #msg{padding:10px;border-radius:8px;margin:8px 0;display:none}
+  .ok{background:#d9f7d9}.error{background:#fbd9d9}
+  .tarjeta{border:1px solid #999;border-radius:8px;padding:12px;margin:8px 0}
+</style>
+</head>
+<body>
+<h2>Pase de lista</h2>
+<div id="msg"></div>
+
+<div id="login">
+  <input id="clave" type="password" placeholder="5101" autocomplete="off">
+  <button onclick="entrar()">Entrar</button>
+</div>
+
+<div id="app" style="display:none">
+  <div id="lector" style="width:100%"></div>
+  <p>¿No funciona la cámara? Escribe tu código de 3 caracteres:</p>
+  <input id="codigo" maxlength="3" placeholder="Ej. 47J" style="text-transform:uppercase">
+  <button onclick="buscar(document.getElementById('codigo').value)">Buscar</button>
+  <div id="confirmar"></div>
+  <button id="btnDescargar" style="display:none" onclick="descargar()">Descargar Excel</button>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+const URL_API = 'PEGA_AQUI_LA_URL_EXEC';
+let clave = '', bloqueado = false;
+
+async function api(accion, extra = {}) {
+  const r = await fetch(URL_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ accion, clave, ...extra })
+  });
+  return r.json();
+}
+
+function aviso(texto, tipo) {
+  const m = document.getElementById('msg');
+  m.textContent = texto; m.className = tipo; m.style.display = 'block';
+}
+
+async function entrar() {
+  clave = document.getElementById('clave').value;
+  const r = await api('login');
+  if (!r.ok) { aviso(r.error, 'error'); return; }
+  document.getElementById('login').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('msg').style.display = 'none';
+  if (r.nivel === 'admin') document.getElementById('btnDescargar').style.display = 'block';
+  iniciarCamara();
+}
+
+function iniciarCamara() {
+  const lector = new Html5Qrcode('lector');
+  lector.start({ facingMode: 'environment' }, { fps: 10, qrbox: 250 },
+    texto => { if (!bloqueado) { bloqueado = true; buscar(texto); } },
+    () => {}
+  ).catch(() => aviso('No se pudo abrir la cámara. Usa el código de 3 caracteres.', 'error'));
+}
+
+async function buscar(valor) {
+  if (!valor.trim()) return;
+  bloqueado = true;
+  const r = await api('buscar', { valor });
+  if (!r.ok) { aviso(r.error, 'error'); bloqueado = false; return; }
+  const cont = document.getElementById('confirmar');
+  cont.innerHTML = '';
+  r.alumnos.forEach(a => {
+    const div = document.createElement('div'); div.className = 'tarjeta';
+    const p = document.createElement('p');
+    p.textContent = '¿Confirmas que eres ' + a.nombre + '? (Matrícula ' + a.matricula + ', Grupo ' + a.grupo + ')';
+    const si = document.createElement('button'); si.textContent = 'Sí, soy yo';
+    si.onclick = () => registrar(a.matricula);
+    const no = document.createElement('button'); no.textContent = 'No soy yo';
+    no.onclick = () => { cont.innerHTML = ''; bloqueado = false; aviso('Registro cancelado', 'error'); };
+    div.append(p, si, no); cont.appendChild(div);
+  });
+}
+
+async function registrar(matricula) {
+  const r = await api('registrar', { matricula });
+  document.getElementById('confirmar').innerHTML = '';
+  document.getElementById('codigo').value = '';
+  if (r.ok) aviso('✔ ' + r.nombre + ': asistencia registrada el ' + r.fecha + ' a las ' + r.hora, 'ok');
+  else aviso(r.error, 'error');
+  setTimeout(() => { bloqueado = false; }, 2500);
+}
+
+async function descargar() {
+  aviso('Generando reporte…', 'ok');
+  const r = await api('descargar');
+  if (!r.ok) { aviso(r.error, 'error'); return; }
+  const bytes = Uint8Array.from(atob(r.base64), c => c.charCodeAt(0));
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = r.nombre; a.click();
+  aviso('Reporte descargado', 'ok');
+}
+</script>
+</body>
+</html>
